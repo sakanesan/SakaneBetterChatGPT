@@ -8,6 +8,10 @@ DEST="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 mkdir -p "$DEST/hooks"
 
 cp "$SRC/ja-style-check.py" "$DEST/hooks/ja-style-check.py"
+if [ -f "$SRC/../agents/ja-proofreader.md" ]; then
+  mkdir -p "$DEST/agents"
+  cp "$SRC/../agents/ja-proofreader.md" "$DEST/agents/ja-proofreader.md"
+fi
 cp "$SRC/ja-ng-phrases.json" "$DEST/hooks/ja-ng-phrases.json"
 chmod +x "$DEST/hooks/ja-style-check.py"
 
@@ -53,3 +57,7 @@ PY
 echo
 echo "設置しました。新しいセッションから全プロジェクトで自動で動きます。"
 echo "一時的に止める場合: export JA_CHECK_DISABLE=1"
+if [ -f "$DEST/agents/ja-proofreader.md" ]; then
+  echo "校正エージェント: $DEST/agents/ja-proofreader.md"
+  echo "長文パイプラインを全プロジェクトで使うなら、CLAUDE.md の内容を $DEST/CLAUDE.md に足してください。"
+fi

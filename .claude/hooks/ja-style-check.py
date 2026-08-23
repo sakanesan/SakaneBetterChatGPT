@@ -28,7 +28,7 @@ import subprocess
 import sys
 import tempfile
 
-MAX_BLOCKS = 2
+MAX_BLOCKS = 1
 LLM_MIN_CHARS = 250
 MIN_CHARS = 30
 LLM_TIMEOUT = 60
@@ -71,6 +71,15 @@ def load_turn(transcript_path):
 
     marker = entries[last_user].get("uuid", str(last_user)) if last_user >= 0 else "head"
 
+    question = ""
+    if last_user >= 0:
+        c = (entries[last_user].get("message") or {}).get("content")
+        if isinstance(c, str):
+            question = c
+        elif isinstance(c, list):
+            question = " ".join(x.get("text", "") for x in c
+                                if isinstance(x, dict) and x.get("type") == "text")
+
     chunks = []
     for e in entries[last_user + 1:]:
         if e.get("type") != "assistant" or e.get("isSidechain"):
@@ -82,7 +91,7 @@ def load_turn(transcript_path):
             for c in content:
                 if isinstance(c, dict) and c.get("type") == "text":
                     chunks.append(c.get("text", ""))
-    return marker, "\n".join(chunks)
+    return marker, question, "\n".join(chunks)
 
 
 def strip_noise(text):
@@ -152,8 +161,7 @@ def sentence_at(text, start, end):
 
 # ---------------------------------------------------------------------- LLM
 
-PROMPT = """あなたは日本語の校閲者です。次の文章に、AIが書いたと分かる不自然な表現が
-含まれているかだけを判定してください。
+PROMPT = """あなたは日本語の校閲者です。質問と回答を読み、回答に問題があるか判定してください。
 
 検出対象:
 - 前口上（事実を伝えず、これから説明する内容や読み方を先に案内する文）
@@ -162,25 +170,38 @@ PROMPT = """あなたは日本語の校閲者です。次の文章に、AIが書
 - 言い切れる内容を不要にぼかす文末
 - 近接する文で同じ文末が繰り返される箇所
 - 英語の語順や名詞句をそのまま移したような文
+- 冗長（質問に対して回答が長すぎる。一言で済む質問に見出しや表で答えている、
+  聞かれていない補足や次の提案を足している、など）
 
 検出しないもの:
 - コード、コマンド、ファイルパス、識別子、技術用語
 - 見出し、箇条書きの短い項目
 - 事実や手順をそのまま述べている文
+- 質問が説明や設計を求めていて、長さが内容に見合っている場合
 
-明らかな違反だけを最大3件、次のJSONだけで出力してください。違反がなければ
-{"violations": []} と出力してください。前後に説明を書かないでください。
+問題があれば、直した回答の全文を rewrite に入れてください。書き直しの規則:
+- コードブロック、数値、ファイル名、コマンドは一字も変えない
+- 事実を足さない、変えない、消さない
+- 指摘のない文はそのまま残す
+- 冗長な場合は削る。質問に答えていない部分を落とす
 
-{"violations": [{"quote": "問題のある箇所をそのまま引用", "reason": "何が問題か20字以内"}]}
+次のJSONだけを出力してください。前後に説明を書かないでください。
+問題がなければ {"violations": [], "rewrite": ""} と出力してください。
 
---- 対象の文章 ---
+{"violations": [{"quote": "問題箇所をそのまま引用", "reason": "何が問題か20字以内"}],
+ "rewrite": "直した回答の全文"}
+
+--- 質問 ---
+{QUESTION}
+
+--- 回答 ---
 """
 
 
-def ask_llm(text):
+def ask_llm(text, question):
     binary = shutil.which("claude")
     if not binary:
-        return []
+        return [], ""
     env = dict(os.environ)
     env["JA_CHECK_DISABLE"] = "1"  # 子プロセスで同じフックが再帰しないように
     model = os.environ.get("JA_CHECK_MODEL", DEFAULT_MODEL)
@@ -189,8 +210,10 @@ def ask_llm(text):
     isolated = base + ["--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
                        "--setting-sources", ""]
 
+    prompt = PROMPT.replace("{QUESTION}", question[:1500]) + text[:6000]
+
     def run(argv):
-        return subprocess.run(argv, input=PROMPT + text[:6000],
+        return subprocess.run(argv, input=prompt,
                               capture_output=True, text=True, timeout=LLM_TIMEOUT,
                               cwd=tempfile.gettempdir(), env=env)
 
@@ -199,23 +222,23 @@ def ask_llm(text):
         if proc.returncode != 0:  # 古い CLI ではフラグが無い
             proc = run(base)
     except Exception:
-        return []
+        return [], ""
     if proc.returncode != 0:
-        return []
+        return [], ""
     m = re.search(r"\{.*\}", proc.stdout, re.S)
     if not m:
-        return []
+        return [], ""
     try:
         data = json.loads(m.group(0))
     except json.JSONDecodeError:
-        return []
+        return [], ""
     out = []
     for v in data.get("violations", [])[:3]:
         if isinstance(v, dict) and v.get("quote"):
             out.append({"quote": str(v["quote"])[:120],
                         "label": "文脈判定",
                         "fix": str(v.get("reason", "書き直す"))[:60]})
-    return out
+    return out, str(data.get("rewrite", ""))[:8000]
 
 
 # -------------------------------------------------------------------- state
@@ -256,7 +279,7 @@ def main():
     if not transcript or not os.path.exists(transcript):
         allow()
 
-    marker, raw = load_turn(transcript)
+    marker, question, raw = load_turn(transcript)
     if not raw.strip():
         allow()  # ツールだけのターン
 
@@ -273,8 +296,10 @@ def main():
 
     mode = os.environ.get("JA_CHECK_MODE", "hybrid")
     hits = list(hard) + (soft if len(soft) >= 2 else [])
+    rewrite = ""
     if mode == "llm" or (mode == "hybrid" and len(text) >= LLM_MIN_CHARS):
-        hits += ask_llm(text)
+        llm_hits, rewrite = ask_llm(text, question)
+        hits += llm_hits
 
     if not hits:
         allow()
@@ -303,6 +328,13 @@ def main():
         "・削除して意味が通る文は消す\n"
         "・指摘のなかった箇所は変えない"
     )
+
+    # 書き直し全文が返っていれば、それを渡す。本体は貼り直すだけで済むので
+    # 2 回目の出力で必ず通り、差し戻しが 1 往復で終わる。
+    if rewrite.strip():
+        reason += ("\n\n校正済みの全文です。事実、数値、コード、ファイル名が"
+                   "変わっていなければ、これをそのまま出力してください。\n\n"
+                   "----- ここから -----\n" + rewrite.strip() + "\n----- ここまで -----")
 
     bump(session_id, marker, count + 1)
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
