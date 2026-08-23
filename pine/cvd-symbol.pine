@@ -19,7 +19,8 @@ lowerTimeframeTooltip = "The indicator scans lower timeframe data to approximate
 useCustomTimeframeInput = input.bool(false, "Use custom timeframe", tooltip = lowerTimeframeTooltip, active = not useTicks)
 lowerTimeframeInput = input.timeframe("1", "Timeframe", active = useCustomTimeframeInput and not useTicks)
 
-showInfoInput = input.bool(true, "Show symbol label", group = "Display")
+showInfoInput   = input.bool(true, "Show symbol label", group = "Display")
+labelSizeInput  = input.string("Large", "Label size", options = ["Small", "Normal", "Large", "Huge"], group = "Display")
 
 var lowerTimeframe = switch
     useTicks                => "1T"
@@ -83,10 +84,18 @@ col = lastVolume >= openVolume ? color.teal : color.red
 hline(0)
 plotcandle(openVolume, maxVolume, minVolume, lastVolume, "CVD", color = col, bordercolor = col, wickcolor = col)
 
+// The symbol is shown in a table so it stays pinned to the top right corner of
+// the pane instead of drifting with the last bar.
+labelSize = switch labelSizeInput
+    "Small"  => size.small
+    "Normal" => size.normal
+    "Huge"   => size.huge
+    => size.large
+
+var table infoTable = table.new(position.top_right, 1, 1, bgcolor = color.new(color.gray, 100), frame_width = 0)
+
 if showInfoInput and barstate.islast
-    var label symbolLabel = na
-    label.delete(symbolLabel)
-    symbolLabel := label.new(bar_index, lastVolume, tickerId + " · " + anchorInput, style = label.style_label_left, color = color.new(col, 80), textcolor = chart.fg_color, size = size.small)
+    table.cell(infoTable, 0, 0, tickerId + "\n" + anchorInput, text_color = color.white, text_size = labelSize, text_halign = text.align_right, bgcolor = #434651)
 
 // ---------------------------------------------------------------------------
 // Error handling
