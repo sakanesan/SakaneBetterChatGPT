@@ -92,6 +92,11 @@ def strip_noise(text):
     text = re.sub(r"https?://\S+", " ", text)
     text = re.sub(r"^\s*>.*$", " ", text, flags=re.M)
     text = re.sub(r"[\w./-]*/[\w./-]+", " ", text)
+    # 鉤括弧・引用符の中は「引用した他人の文」なので地の文として数えない。
+    # NG 表現を例として示すときに自分が書いたと誤判定されるのを防ぐ。
+    text = re.sub(r"「[^「」]{0,120}」", " ", text)
+    text = re.sub(r"『[^『』]{0,120}』", " ", text)
+    text = re.sub(r"\"[^\"\n]{0,120}\"", " ", text)
     return text
 
 
@@ -274,13 +279,20 @@ def main():
     if not hits:
         allow()
 
-    seen, lines = set(), []
+    # 同じ文に複数の指摘が付いたら 1 件にまとめる。同じ引用が並ぶと直しにくい。
+    grouped, order = {}, []
     for h in hits[:8]:
-        key = h.get("matched") or h["quote"]
-        if key in seen:
-            continue
-        seen.add(key)
-        lines.append('- 「{}」\n  → {}。{}'.format(h["quote"], h["label"], h["fix"]))
+        q = h["quote"]
+        if q not in grouped:
+            grouped[q] = []
+            order.append(q)
+        note = "{}。{}".format(h["label"], h["fix"])
+        if note not in grouped[q]:
+            grouped[q].append(note)
+
+    lines = []
+    for q in order[:5]:
+        lines.append('- 「{}」\n  → {}'.format(q, " / ".join(grouped[q][:3])))
 
     reason = (
         "[日本語チェック] 今の返答に、AIが書いたと分かる表現が残っています。\n\n"
