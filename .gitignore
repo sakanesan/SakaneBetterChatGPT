@@ -26,3 +26,5 @@ dist-ssr
 release/
 
 .env
+# Claude Code hook bytecode
+.claude/hooks/__pycache__/
