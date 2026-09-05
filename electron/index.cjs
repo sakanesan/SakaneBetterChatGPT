@@ -12,19 +12,24 @@ if (require('electron-squirrel-startup')) app.quit();
 const PORT = isDev ? '5173' : '51735';
 const ICON = 'icon-rounded.png';
 const ICON_TEMPLATE = 'iconTemplate.png';
+// Full HD (1920x1080) window size
+const WINDOW_WIDTH = 1920;
+const WINDOW_HEIGHT = 1080;
 
 function createWindow() {
   autoUpdater.checkForUpdatesAndNotify();
 
   win = new BrowserWindow({
-	autoHideMenuBar: true,
+    width: WINDOW_WIDTH,
+    height: WINDOW_HEIGHT,
+    center: true,
+    autoHideMenuBar: true,
     show: false,
     icon: assetPath(ICON),
   });
 
   createTray(win);
 
-  win.maximize();
   win.show();
 
   isDev || createServer();
@@ -53,8 +58,8 @@ const createTray = (window) => {
     {
       label: 'Show',
       click: () => {
-        win.maximize();
         window.show();
+        window.focus();
       },
     },
     {
@@ -67,8 +72,8 @@ const createTray = (window) => {
   ]);
 
   tray.on('click', () => {
-    win.maximize();
     window.show();
+    window.focus();
   });
   tray.setToolTip('Better ChatGPT');
   tray.setContextMenu(contextMenu);
